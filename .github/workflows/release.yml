@@ -1,0 +1,80 @@
+name: Release SnipDrag
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "SnipDrag/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "0.1.$env:GITHUB_RUN_NUMBER"
+          $tag = "v$version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Publish app
+        shell: pwsh
+        run: |
+          dotnet publish .\SnipDrag\SnipDrag.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .\SnipDrag\artifacts | Out-Null
+          Compress-Archive `
+            -Path .\SnipDrag\bin\Release\net10.0-windows\win-x64\publish\* `
+            -DestinationPath ".\SnipDrag\artifacts\SnipDrag-${{ steps.version.outputs.version }}-win-x64-portable.zip" `
+            -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc `
+            "/DAppVersion=${{ steps.version.outputs.version }}" `
+            "/DSourceDir=$PWD\SnipDrag\bin\Release\net10.0-windows\win-x64\publish" `
+            "/DOutputDir=$PWD\SnipDrag\artifacts\installer" `
+            ".\SnipDrag\installer\SnipDrag.iss"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: SnipDrag ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            SnipDrag/artifacts/SnipDrag-${{ steps.version.outputs.version }}-win-x64-portable.zip
+            SnipDrag/artifacts/installer/SnipDrag-Setup-${{ steps.version.outputs.version }}.exe
